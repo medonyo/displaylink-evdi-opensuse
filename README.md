@@ -22,3 +22,14 @@ Just after enter in the displaylink-1.1.62 directory and launch the install scri
 cd build/displaylink-1.1.62
 ./displaylink-installer.sh install
 ```
+
+
+in case of issues:
+```
+systemctl start displaylink.service
+```
+and
+```
+journalctl -xe 
+```
+for debugging.
