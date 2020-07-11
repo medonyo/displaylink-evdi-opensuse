@@ -1,24 +1,7 @@
---- displaylink-installer.sh.orig	2016-05-10 12:13:27.000000000 +0200
-+++ displaylink-installer.sh	2016-05-17 10:48:23.061600609 +0200
-@@ -10,7 +10,15 @@
- 
- add_udev_rule()
- {
--  echo 'ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="17e9", ATTR{bNumInterfaces}=="*5", GROUP="plugdev", MODE="0660"' > /etc/udev/rules.d/99-displaylink.rules
-+  local UDevRules='ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="17e9", ATTR{bNumInterfaces}=="*5", GROUP="plugdev", MODE="0660"'
-+  if which lsb_release >/dev/null; then
-+    local R=$(lsb_release -d -s)
-+    local R=${R#\"}
-+    if [ -z "${R##openSUSE Tumbleweed*}" ]; then
-+      local UDevRules='ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="17e9", ATTR{bNumInterfaces}=="*5", GROUP="users", MODE="0660"'
-+    fi
-+  fi
-+  echo ${UDevRules} > /etc/udev/rules.d/99-displaylink.rules
-   chmod 0644 /etc/udev/rules.d/99-displaylink.rules
- }
- 
-@@ -96,9 +104,25 @@
-   chmod 0644 /etc/init/displaylink.conf
+--- displaylink-installer.sh	2020-05-05 12:31:00.000000000 +0200
++++ ../../displaylink-installer.sh	2020-07-10 23:22:58.000000000 +0200
+@@ -126,16 +126,48 @@
+   chmod 0644 /etc/init/displaylink-driver.conf
  }
  
 +get_systemd_service_file()
@@ -27,7 +10,7 @@
 +    local R=$(lsb_release -d -s)
 +    local R=${R#\"}
 +    if [ -z "${R##openSUSE Tumbleweed*}" ]; then
-+      echo "/etc/systemd/system/displaylink.service"
++      echo "/usr/lib/systemd/system/displaylink.service"
 +      return
 +    fi
 +  fi
@@ -36,86 +19,157 @@
 +  return
 +}
 +
- add_systemd_service()
- {
--  cat > /lib/systemd/system/displaylink.service <<'EOF'
-+  local ServiceFile=$(get_systemd_service_file)
-+  cat > ${ServiceFile} <<'EOF'
- [Unit]
- Description=DisplayLink Manager Service
- After=display-manager.service
-@@ -116,7 +140,7 @@
- 
- EOF
- 
--  chmod 0644 /lib/systemd/system/displaylink.service
-+  chmod 0644 ${ServiceFile}
-   systemctl enable displaylink.service
- }
- 
-@@ -127,8 +151,24 @@
- 
- remove_systemd_service()
- {
-+  local ServiceFile=$(get_systemd_service_file)
-   systemctl disable displaylink.service
--  rm -f /lib/systemd/system/displaylink.service
-+  rm -f ${ServiceFile}
-+}
-+
-+get_pm_script()
++get_system_path_part()
 +{
 +  if which lsb_release >/dev/null; then
 +    local R=$(lsb_release -d -s)
 +    local R=${R#\"}
 +    if [ -z "${R##openSUSE Tumbleweed*}" ]; then
-+      echo "/usr/lib/systemd/system-sleep/displaylink.sh"
++      echo "/usr/lib/systemd"
 +      return
 +    fi
 +  fi
 +
-+  echo "/lib/systemd/system-sleep/displaylink.sh"
++  echo "/lib/systemd"
 +  return
++}
++
+ add_systemd_service()
+ {
+-  cat > /lib/systemd/system/displaylink-driver.service <<EOF
++  local ServiceFile=$(get_systemd_service_file)
++  cat > ${ServiceFile} <<'EOF'
++  
+ [Unit]
+ Description=DisplayLink Driver Service
+ After=display-manager.service
+ Conflicts=getty@tty7.service
+ 
+ [Service]
+-ExecStartPre=/bin/sh -c 'modprobe evdi || (dkms install \$(ls -t /usr/src | grep evdi | head -n1  | sed -e "s:-:/:") && modprobe evdi)'
++ExecStartPre=/bin/sh -c 'modprobe evdi || (dkms install $(ls -t /usr/src | grep evdi | head -n1  | sed -e "s:-:/:") && modprobe evdi)'
+ ExecStart=/opt/displaylink/DisplayLinkManager
+ Restart=always
+ WorkingDirectory=/opt/displaylink
+@@ -143,7 +175,7 @@
+ 
+ EOF
+ 
+-  chmod 0644 /lib/systemd/system/displaylink-driver.service
++  chmod 0644 ${ServiceFile}
  }
  
- add_pm_script()
-@@ -197,14 +237,14 @@
-     ln -s $COREDIR/displaylink.sh /etc/pm/sleep.d/displaylink.sh
+ add_runit_service()
+@@ -180,14 +212,16 @@
+ 
+ remove_systemd_service()
+ {
++  local ServiceFile=$(get_systemd_service_file)
++  local path_part=$(get_system_path_part)
+   driver_name="displaylink-driver"
+-  if grep -sqi displaylink /lib/systemd/system/dlm.service; then
++  if grep -sqi displaylink $path_part/system/dlm.service; then
+     driver_name="dlm"
+   fi
+   echo "Stopping ${driver_name} systemd service"
+   systemctl stop ${driver_name}.service
+   systemctl disable ${driver_name}.service
+-  rm -f /lib/systemd/system/${driver_name}.service
++  rm -f $path_part/system/${driver_name}.service
+ }
+ 
+ remove_runit_service()
+@@ -316,7 +350,8 @@
+     ln -sf $COREDIR/suspend.sh /etc/pm/sleep.d/displaylink.sh
    elif [ "$1" = "systemd" ]
    then
--    ln -s $COREDIR/displaylink.sh /lib/systemd/system-sleep/displaylink.sh
-+    ln -s $COREDIR/displaylink.sh $(get_pm_script)
-   fi
- }
- 
- remove_pm_scripts()
+-    ln -sf $COREDIR/suspend.sh /lib/systemd/system-sleep/displaylink.sh
++    local path_part=$(get_system_path_part)
++    ln -sf $COREDIR/suspend.sh $path_part/system-sleep/displaylink.sh
+     if [ -d "/etc/pm/sleep.d" ];
+     then
+       ln -sf $COREDIR/suspend.sh /etc/pm/sleep.d/10_displaylink
+@@ -340,7 +375,8 @@
  {
    rm -f /etc/pm/sleep.d/displaylink.sh
+   rm -f /etc/pm/sleep.d/10_displaylink
 -  rm -f /lib/systemd/system-sleep/displaylink.sh
-+  rm -f $(get_pm_script)
++  local path_part=$(get_system_path_part)
++  rm -f $path_part/system-sleep/displaylink.sh
+   rm -f /etc/zzz.d/suspend/displaylink.sh /etc/zzz.d/resume/displaylink.sh
  }
  
- cleanup()
-@@ -342,7 +382,17 @@
-   version_lt "$KVER" "$KVER_MIN" && missing_requirement "Kernel version $KVER is too old. At least $KVER_MIN is required"
+@@ -521,16 +557,52 @@
  
-   # Linux headers
--  [ ! -f "/lib/modules/$KVER/build/Kconfig" ] && missing_requirement "Linux headers for running kernel, $KVER"
-+  if which lsb_release >/dev/null; then
-+    local R=$(lsb_release -d -s)
+ install_dependencies()
+ {
+-  hash apt 2>/dev/null || return
+-  install_dependencies_apt
++
++  if hash lsb_release 2>/dev/null; then
++    local R
++    R=$(lsb_release -d -s)
 +    local R=${R#\"}
-+    if [ -z "${R##openSUSE Tumbleweed*}" ]; then
-+      [ ! -f "/lib/modules/$KVER/build/Makefile" ] && missing_requirement "Linux headers for running kernel, $KVER"
++    
++    echo "Distribution discovered: $R"
++    if [ -z "${R##openSUSE Tumbleweed*}" ] ;then
++        install_dependencies_zypper
 +    else
-+      [ ! -f "/lib/modules/$KVER/build/Kconfig" ] && missing_requirement "Linux headers for running kernel, $KVER"
++        hash apt 2>/dev/null || return
++        install_dependencies_apt
 +    fi
-+  else
-+    [ ! -f "/lib/modules/$KVER/build/Kconfig" ] && missing_requirement "Linux headers for running kernel, $KVER"
 +  fi
++
  }
  
- usage()
-@@ -357,19 +407,21 @@
+-check_libdrm()
++check_libdrm_apt()
+ {
+   hash apt 2>/dev/null || return
+   apt list -qq --installed libdrm-dev 2>/dev/null | grep -q libdrm-dev
+ }
+ 
++check_libdrm_zypper()
++{
++  echo "zypper checkin libdr..."
++}
++
++check_libdrm()
++{
++
++  if hash lsb_release 2>/dev/null; then
++    local R
++    R=$(lsb_release -d -s)
++    local R=${R#\"}
++    
++    echo "Distribution discovered: $R"
++    if [ -z "${R##openSUSE Tumbleweed*}" ] ;then
++        check_libdrm_zypper
++    else
++        check_libdrm_apt
++    fi
++  fi
++
++}
++
+ apt_ask_for_dependencies()
+ {
+   apt --simulate install dkms libdrm-dev 2>&1 |  grep  "^E: " > /dev/null && return 1
+@@ -545,6 +617,13 @@
+   apt update
+ }
+ 
++install_dependencies_zypper()
++{
++    echo "zypper checkin repos..."
++    #empty for now
++    #zypper se --installed-only | grep libdrm-dev
++}
++
+ install_dependencies_apt()
+ {
+   hash dkms 2>/dev/null
+@@ -592,20 +671,22 @@
  
  detect_init_daemon()
  {
@@ -126,10 +180,11 @@
 -
 -    [ -z "${INIT##*upstart*}" ] && SYSTEMINITDAEMON="upstart"
 -    [ -z "${INIT##*systemd*}" ] && SYSTEMINITDAEMON="systemd"
+-    [ -z "${INIT##*runit*}" ] && SYSTEMINITDAEMON="runit"
 -
      if [ -z "$SYSTEMINITDAEMON" ]; then
 -        echo "ERROR: the installer script is unable to find out how to start DisplayLinkManager service automatically on your system." >&2
--        echo "Please set an environment variable SYSTEMINITDAEMON to 'upstart' or 'systemd' before running the installation script to force one of the options." >&2
+-        echo "Please set an environment variable SYSTEMINITDAEMON to 'upstart', 'systemd' or 'runit' before running the installation script to force one of the options." >&2
 -        echo "Installation terminated." >&2
 -        exit 1
 +        INIT=$(readlink /proc/1/exe)
@@ -139,28 +194,29 @@
 +
 +        [ -z "${INIT##*upstart*}" ] && SYSTEMINITDAEMON="upstart"
 +        [ -z "${INIT##*systemd*}" ] && SYSTEMINITDAEMON="systemd"
-+
++        [ -z "${INIT##*runit*}" ] && SYSTEMINITDAEMON="runit"
++        
 +        if [ -z "$SYSTEMINITDAEMON" ]; then
 +            echo "ERROR: the installer script is unable to find out how to start DisplayLinkManager service automatically on your system." >&2
-+            echo "Please set an environment variable SYSTEMINITDAEMON to 'upstart' or 'systemd' before running the installation script to force one of the options." >&2
++            echo "Please set an environment variable SYSTEMINITDAEMON to 'upstart', 'systemd' or 'runit' before running the installation script to force one of the options." >&2
 +            echo "Installation terminated." >&2
 +            exit 1
 +        fi
      fi
  }
  
-@@ -377,10 +429,14 @@
- {
-   if which lsb_release >/dev/null; then
-     local R=$(lsb_release -d -s)
+@@ -614,11 +695,13 @@
+   if hash lsb_release 2>/dev/null; then
+     local R
+     R=$(lsb_release -d -s)
+-
 +    local R=${R#\"}
++    
      echo "Distribution discovered: $R"
      [ -z "${R##Ubuntu 14.*}" ] && return
      [ -z "${R##Ubuntu 15.*}" ] && return
      [ -z "${R##Ubuntu 16.04*}" ] && return
-+    if [ -z "${R##openSUSE Tumbleweed*}" ]; then
-+      SYSTEMINITDAEMON="systemd"
-+    fi
++    [ -z "${R##openSUSE Tumbleweed*}" ] && return
    else
      echo "WARNING: This is not an officially supported distribution." >&2
      echo "Please use DisplayLink Forum for getting help if you find issues." >&2
